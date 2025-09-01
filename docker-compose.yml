@@ -1,0 +1,104 @@
+
+
+services:
+  # PXE Server with DHCP and TFTP
+  pxe_server:
+    build:
+      context: .
+      dockerfile: docker/pxe_server.Dockerfile
+    container_name: pxe_server
+    hostname: pxe-server
+    ports:
+      - "3000:3000"  # Web interface (if needed)
+      - "67:67/udp"  # DHCP
+      - "69:69/udp"  # TFTP
+      - "53:53/udp"  # DNS
+      - "2222:22"    # SSH (mapped to avoid conflict with host)
+    volumes:
+      - pxe_data:/var/lib/tftpboot
+      - pxe_logs:/var/log/pxe
+    environment:
+      - PXE_NETWORK=192.168.1.0/24
+      - PXE_GATEWAY=192.168.1.1
+      - PXE_DNS=8.8.8.8,8.8.4.4
+    networks:
+      - pxe_network
+    restart: unless-stopped
+    privileged: true  # Required for PXE services
+
+  # Main Program API Server
+  main_program:
+    build:
+      context: .
+      dockerfile: docker/main_program.Dockerfile
+    container_name: main_program
+    hostname: main-program
+    ports:
+      - "5000:5000"  # API server
+    volumes:
+      - main_program_logs:/var/log/main_program
+    environment:
+      - FLASK_ENV=development
+    networks:
+      - pxe_network
+    depends_on:
+      - pxe_server
+    restart: unless-stopped
+
+  # Development PXE Client (for testing)
+  pxe_client:
+    build:
+      context: .
+      dockerfile: docker/pxe_client.Dockerfile
+    container_name: pxe_client
+    hostname: test-client
+    volumes:
+      - pxe_client_reports:/reports
+      - pxe_client_logs:/var/log/diagnostics
+    networks:
+      - pxe_network
+    depends_on:
+      - pxe_server
+    restart: unless-stopped
+    profiles:
+      - dev  # Only start in development mode
+
+  # Monitoring and Dashboard
+  monitoring:
+    image: grafana/grafana:latest
+    container_name: monitoring
+    hostname: monitoring
+    ports:
+      - "3001:3000"  # Grafana dashboard
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin123
+    networks:
+      - pxe_network
+    restart: unless-stopped
+    profiles:
+      - monitoring
+
+volumes:
+  pxe_data:
+    driver: local
+  pxe_logs:
+    driver: local
+  main_program_logs:
+    driver: local
+  pxe_client_reports:
+    driver: local
+  pxe_client_logs:
+    driver: local
+  grafana_data:
+    driver: local
+
+networks:
+  pxe_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 192.168.1.0/24
+          gateway: 192.168.1.1
